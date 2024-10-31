@@ -1,6 +1,6 @@
 # Compiler and flags
 CC = gcc
-CFLAGS = -fPIC -Wall -Wextra -O2 -g -I/usr/include/gssapi -Wno-unused-parameter
+CFLAGS = -fPIC -Wall -Wextra -O2 -g -I/usr/include/gssapi -Wno-unused-parameter -Wno-override-init
 LDFLAGS = -shared -lcurl -ljson-c -lssl -lcrypto -luuid
 
 # Source and target files

@@ -1,15 +1,15 @@
 /* qkd.c */
 
 #include "qkd.h"
-#include <curl/curl.h>
-#include <json-c/json.h>
-#include <openssl/bio.h>
-#include <openssl/evp.h>
-#include <openssl/buffer.h>
-#include <uuid/uuid.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <json-c/json.h>
+#include <errno.h>
 
 #define ENC_SAE_ID "UPB-BC-UPBR"
 #define DEC_SAE_ID "UPB-BC-UPBP"
@@ -18,304 +18,487 @@
 #define STATIC_ENC_IPPORT "141.85.241.65:12443"
 #define STATIC_DEC_IPPORT "141.85.241.65:11443"
 
-/* Helper struct for storing response data */
-struct MemoryStruct {
-    char *memory;
-    size_t size;
-};
-
-/* Callback function for handling data received from curl */
-static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
-    size_t realsize = size * nmemb;
-    struct MemoryStruct *mem = (struct MemoryStruct *)userp;
-
-    char *ptr = (char *)realloc(mem->memory, mem->size + realsize + 1);
-    if (ptr == NULL) {
-        // Out of memory
-        return 0;
-    }
-
-    mem->memory = ptr;
-    memcpy(&(mem->memory[mem->size]), contents, realsize);
-    mem->size += realsize;
-    mem->memory[mem->size] = 0; // Null-terminate the string
-
-    return realsize;
-}
-
-/* Base64 decoding function using OpenSSL */
 static int Base64Decode(const char* b64message, unsigned char** buffer, size_t* length) {
-    BIO *bio, *b64;
-    int decodeLen = strlen(b64message);
-    int padding = 0;
-
-    if (b64message[decodeLen - 1] == '=' && b64message[decodeLen - 2] == '=') // Last two chars are '='
-        padding = 2;
-    else if (b64message[decodeLen - 1] == '=') // Last char is '='
-        padding = 1;
-
-    size_t expectedLen = (decodeLen * 3) / 4 - padding;
-
-    *buffer = (unsigned char*)malloc(expectedLen);
+    // Base64 decoding table
+    static const unsigned char decoding_table[256] = {
+        [0 ... 255] = 0x80, // Initialize all elements to invalid marker (0x80)
+        ['A'] = 0,  ['B'] = 1,  ['C'] = 2,  ['D'] = 3,
+        ['E'] = 4,  ['F'] = 5,  ['G'] = 6,  ['H'] = 7,
+        ['I'] = 8,  ['J'] = 9,  ['K'] = 10, ['L'] = 11,
+        ['M'] = 12, ['N'] = 13, ['O'] = 14, ['P'] = 15,
+        ['Q'] = 16, ['R'] = 17, ['S'] = 18, ['T'] = 19,
+        ['U'] = 20, ['V'] = 21, ['W'] = 22, ['X'] = 23,
+        ['Y'] = 24, ['Z'] = 25,
+        ['a'] = 26, ['b'] = 27, ['c'] = 28, ['d'] = 29,
+        ['e'] = 30, ['f'] = 31, ['g'] = 32, ['h'] = 33,
+        ['i'] = 34, ['j'] = 35, ['k'] = 36, ['l'] = 37,
+        ['m'] = 38, ['n'] = 39, ['o'] = 40, ['p'] = 41,
+        ['q'] = 42, ['r'] = 43, ['s'] = 44, ['t'] = 45,
+        ['u'] = 46, ['v'] = 47, ['w'] = 48, ['x'] = 49,
+        ['y'] = 50, ['z'] = 51,
+        ['0'] = 52, ['1'] = 53, ['2'] = 54, ['3'] = 55,
+        ['4'] = 56, ['5'] = 57, ['6'] = 58, ['7'] = 59,
+        ['8'] = 60, ['9'] = 61,
+        ['+'] = 62, ['/'] = 63
+    };
+    
+    size_t input_length = strlen(b64message);
+    size_t padding = 0;
+    
+    // Check for padding characters and adjust input length accordingly
+    if (input_length >= 2) {
+        if (b64message[input_length - 1] == '=' && b64message[input_length - 2] == '=') {
+            padding = 2;
+        }
+        else if (b64message[input_length - 1] == '=') {
+            padding = 1;
+        }
+    }
+    
+    // Calculate the expected length of the decoded data
+    *length = (input_length * 3) / 4 - padding;
+    
+    // Allocate memory for the decoded data
+    *buffer = (unsigned char*)malloc(*length);
     if (*buffer == NULL) {
-        return -1;
+        return -1; // Memory allocation failure
     }
-
-    bio = BIO_new_mem_buf(b64message, -1);
-    if (bio == NULL) {
-        free(*buffer);
-        return -1;
+    
+    size_t i = 0, j = 0;
+    unsigned int sextet_a, sextet_b, sextet_c, sextet_d;
+    
+    while (i < input_length) {
+        // Read four base64 characters
+        sextet_a = b64message[i] == '=' ? 0 & i++ : decoding_table[(unsigned char)b64message[i++]];
+        sextet_b = b64message[i] == '=' ? 0 & i++ : decoding_table[(unsigned char)b64message[i++]];
+        sextet_c = b64message[i] == '=' ? 0 & i++ : decoding_table[(unsigned char)b64message[i++]];
+        sextet_d = b64message[i] == '=' ? 0 & i++ : decoding_table[(unsigned char)b64message[i++]];
+        
+        // Validate characters
+        if (sextet_a == 0x80 || sextet_b == 0x80 ||
+            (sextet_c == 0x80 && b64message[i - 2] != '=') ||
+            (sextet_d == 0x80 && b64message[i - 1] != '=')) {
+            free(*buffer);
+            *buffer = NULL;
+            return -1; // Invalid character detected
+        }
+        
+        // Combine the sextets into bytes
+        unsigned int triple = (sextet_a << 18) + (sextet_b << 12) + 
+                               (sextet_c << 6) + sextet_d;
+        
+        if (j < *length) (*buffer)[j++] = (triple >> 16) & 0xFF;
+        if (j < *length) (*buffer)[j++] = (triple >> 8) & 0xFF;
+        if (j < *length) (*buffer)[j++] = triple & 0xFF;
     }
-    b64 = BIO_new(BIO_f_base64());
-    if (b64 == NULL) {
-        BIO_free(bio);
-        free(*buffer);
-        return -1;
-    }
-    bio = BIO_push(b64, bio);
-    BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); // Ignore newlines
-    *length = BIO_read(bio, *buffer, decodeLen);
-    BIO_free_all(bio);
-
-    if (*length != expectedLen) {
-        free(*buffer);
-        return -1;
-    }
-
-    return 0;
+    
+    return 0; // Success
 }
 
-/* Function to convert UUID string to bytes */
+static int hex_char_to_value(char c) {
+    if ('0' <= c && c <= '9') {
+        return c - '0';
+    }
+    else if ('a' <= c && c <= 'f') {
+        return 10 + (c - 'a');
+    }
+    else if ('A' <= c && c <= 'F') {
+        return 10 + (c - 'A');
+    }
+    else {
+        return -1;
+    }
+}
+
+/* 
+ * Checks if a character is a valid hexadecimal digit or a hyphen.
+ */
+static int is_valid_uuid_char(char c) {
+    return (('0' <= c && c <= '9') ||
+            ('a' <= c && c <= 'f') ||
+            ('A' <= c && c <= 'F') ||
+            (c == '-'));
+}
+
+/* 
+ * Converts a UUID string to a 16-byte array.
+ * 
+ * Parameters:
+ *   - uuid_str: The null-terminated UUID string.
+ *   - uuid_bytes: A 16-byte array to store the resulting binary UUID.
+ * 
+ * Returns:
+ *   - 0 on success.
+ *   - -1 on failure (invalid format).
+ */
 static int UUIDStringToBytes(const char* uuid_str, uint8_t* uuid_bytes) {
-    uuid_t uuid;
-    if (uuid_parse(uuid_str, uuid) != 0) {
-        return -1; // Invalid UUID string
-    }
-    memcpy(uuid_bytes, uuid, KEY_ID_LENGTH);
-    return 0;
-}
-
-/* Function to convert UUID bytes to string */
-static void UUIDBytesToString(const uint8_t* uuid_bytes, char* uuid_str) {
-    uuid_unparse(uuid_bytes, uuid_str);
-}
-
-int qkd_get_key(QKD_Credential *cred, QKD_Key *key) {
-    if (cred == NULL || key == NULL) {
+    if (uuid_str == NULL || uuid_bytes == NULL) {
         return -1;
     }
 
-    const char *qkd_user = cred->principal_name;
-    if (strlen(qkd_user) > 128) {
+    // Expected UUID format length
+    const int UUID_STR_LEN = 36;
+
+    // Check the length of the UUID string
+    if (strlen(uuid_str) != UUID_STR_LEN) {
+        return -1;
+    }
+
+    // Hyphen positions in a UUID string
+    const int hyphen_positions[] = {8, 13, 18, 23};
+    int hyphen_count = sizeof(hyphen_positions) / sizeof(hyphen_positions[0]);
+
+    // Validate hyphens at correct positions
+    for (int i = 0; i < hyphen_count; i++) {
+        if (uuid_str[hyphen_positions[i]] != '-') {
+            return -1;
+        }
+    }
+
+    // Validate all other characters
+    for (int i = 0; i < UUID_STR_LEN; i++) {
+        // Skip hyphens
+        int is_hyphen = 0;
+        for (int j = 0; j < hyphen_count; j++) {
+            if (i == hyphen_positions[j]) {
+                is_hyphen = 1;
+                break;
+            }
+        }
+        if (is_hyphen) {
+            continue;
+        }
+        if (!is_valid_uuid_char(uuid_str[i])) {
+            return -1;
+        }
+    }
+
+    // Convert UUID string to bytes
+    int byte_index = 0;
+    for (int i = 0; i < UUID_STR_LEN; i++) {
+        // Skip hyphens
+        int is_hyphen = 0;
+        for (int j = 0; j < hyphen_count; j++) {
+            if (i == hyphen_positions[j]) {
+                is_hyphen = 1;
+                break;
+            }
+        }
+        if (is_hyphen) {
+            continue;
+        }
+
+        // Convert two hex characters to one byte
+        if (i + 1 >= UUID_STR_LEN) {
+            // Unexpected end
+            return -1;
+        }
+
+        int high = hex_char_to_value(uuid_str[i]);
+        int low = hex_char_to_value(uuid_str[i + 1]);
+
+        if (high == -1 || low == -1) {
+            return -1;
+        }
+
+        uuid_bytes[byte_index++] = (high << 4) | low;
+        i++; // Skip the next character as it's already processed
+    }
+
+    // Final byte index should be 16
+    if (byte_index != 16) {
+        return -1;
+    }
+
+    return 0; // Success
+}
+
+/* 
+ * Converts a 16-byte UUID array to a UUID string.
+ * 
+ * Parameters:
+ *   - uuid_bytes: A 16-byte array containing the binary UUID.
+ *   - uuid_str: A 37-byte buffer to store the resulting UUID string (36 characters + null terminator).
+ * 
+ * Note:
+ *   - The uuid_str buffer must be at least 37 bytes long.
+ */
+static void UUIDBytesToString(const uint8_t* uuid_bytes, char* uuid_str) {
+    if (uuid_bytes == NULL || uuid_str == NULL) {
+        return;
+    }
+
+    // Positions where hyphens should be inserted
+    const int hyphen_positions[] = {8, 13, 18, 23};
+    int hyphen_count = sizeof(hyphen_positions) / sizeof(hyphen_positions[0]);
+    int hyphen_index = 0;
+
+    int str_index = 0;
+    for (int i = 0; i < 16; i++) {
+        // Insert hyphen if needed
+        if (hyphen_index < hyphen_count && str_index == hyphen_positions[hyphen_index]) {
+            uuid_str[str_index++] = '-';
+            hyphen_index++;
+        }
+
+        // Convert byte to two hex characters
+        unsigned char byte = uuid_bytes[i];
+        uuid_str[str_index++] = "0123456789abcdef"[byte >> 4];
+        uuid_str[str_index++] = "0123456789abcdef"[byte & 0x0F];
+    }
+
+    uuid_str[str_index] = '\0'; // Null-terminate the string
+}
+
+
+// Replacement function using fork and exec to execute curl
+int qkd_get_key(QKD_Credential *cred, QKD_Key *key) {
+    if (key == NULL) {
         return -1;
     }
 
     memset(key, 0, sizeof(QKD_Key));
 
-    CURL *curl;
-    CURLcode res;
-    struct MemoryStruct chunk;
+    int pipefd[2];
+    pid_t pid;
+    int status;
+    ssize_t bytes_read;
+    char *output = NULL;
+    size_t output_size = 0;
+    size_t buffer_size = 4096; // Initial buffer size
 
-    chunk.memory = (char *)malloc(1);  // Will be grown as needed by realloc
-    chunk.size = 0;            // No data at this point
+    // Initialize memory for capturing output
+    output = malloc(buffer_size);
+    if (output == NULL) {
+        fprintf(stderr, "get_key_from_qkd: Failed to allocate memory\n");
+        return -1;
+    }
 
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-    curl = curl_easy_init();
-    if (curl) {
+    // Create a pipe
+    if (pipe(pipefd) == -1) {
+        fprintf(stderr, "get_key_from_qkd: pipe() failed: %s\n", strerror(errno));
+        free(output);
+        return -1;
+    }
+
+    // Fork the process
+    pid = fork();
+    if (pid == -1) {
+        fprintf(stderr, "get_key_from_qkd: fork() failed: %s\n", strerror(errno));
+        close(pipefd[0]);
+        close(pipefd[1]);
+        free(output);
+        return -1;
+    }
+
+    if (pid == 0) {
+        // Child process
+        // Redirect stdout to the pipe's write end
+        close(pipefd[0]); // Close unused read end
+        if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
+            fprintf(stderr, "get_key_from_qkd_ (child): dup2() failed: %s\n", strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+        // Redirect stderr to the pipe's write end (optional)
+        if (dup2(pipefd[1], STDERR_FILENO) == -1) {
+            fprintf(stderr, "get_key_from_qkd_ (child): dup2() failed: %s\n", strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+        close(pipefd[1]); // Close the original write end after duplicating
+
+        // Construct the curl command arguments
 #ifdef STATIC_CREDENTIALS
         const char *qkd_ipport_value = STATIC_ENC_IPPORT;
 #else
         // Get QKD IP and port from environment variable
         const char *env_qkd_ipport_name = "QKD_IPPORT";
         char *qkd_ipport_value = getenv(env_qkd_ipport_name);
-        if (env_qkd_ipport_value == NULL) {
+        if (qkd_ipport_value == NULL) {
             fprintf(stderr, "Environment variable %s is not set.\n", env_qkd_ipport_name);
-            curl_easy_cleanup(curl);
-            free(chunk.memory);
-            curl_global_cleanup();
-            return -1;
+            exit(EXIT_FAILURE);
         }
 #endif
-        // Set the URL
+
+        // Build the URL
         char qkd_url[256];
         snprintf(qkd_url, sizeof(qkd_url), "https://%s/api/v1/keys/" ENC_SAE_ID "/enc_keys", qkd_ipport_value);
-        curl_easy_setopt(curl, CURLOPT_URL, qkd_url);
 
-        // Set SSL options
+        // Build the curl command arguments
 #ifdef STATIC_CREDENTIALS
         const char *ssl_cert = "./qkd.crt";
-        curl_easy_setopt(curl, CURLOPT_SSLCERT, ssl_cert);
-
-        const char *ssl_key = "./qkd-new.key";
-        curl_easy_setopt(curl, CURLOPT_SSLKEY, ssl_key);
-
+        const char *ssl_key = "./qkd.key";
         const char *cacert = "./qkd-ca.crt";
-        curl_easy_setopt(curl, CURLOPT_CAINFO, cacert);
 #else
         const char *env_ssl_cert_name = "QKD_SSL_CERT";
         char *env_ssl_cert_value = getenv(env_ssl_cert_name);
-
-        if (env_ssl_cert_value != NULL) {
-            curl_easy_setopt(curl, CURLOPT_SSLCERT, env_ssl_cert_value);
-        } else {
+        if (env_ssl_cert_value == NULL) {
             fprintf(stderr, "Environment variable %s is not set.\n", env_ssl_cert_name);
-            curl_easy_cleanup(curl);
-            free(chunk.memory);
-            curl_global_cleanup();
-            return -1;
+            exit(EXIT_FAILURE);
         }
 
-        const char *env_ssl_key_name = "QKD_SSL_CERT";
+        const char *env_ssl_key_name = "QKD_SSL_KEY"; // Corrected variable name
         char *env_ssl_key_value = getenv(env_ssl_key_name);
-
-        if (env_ssl_key_value != NULL) {
-            curl_easy_setopt(curl, CURLOPT_SSLKEY, env_ssl_key_value);
-        } else {
+        if (env_ssl_key_value == NULL) {
             fprintf(stderr, "Environment variable %s is not set.\n", env_ssl_key_name);
-            curl_easy_cleanup(curl);
-            free(chunk.memory);
-            curl_global_cleanup();
-            return -1;
+            exit(EXIT_FAILURE);
         }
 
-        const char *env_ca_name = "QKD_SSL_CERT";
+        const char *env_ca_name = "QKD_CA_CERT"; // Corrected variable name
         char *env_ca_value = getenv(env_ca_name);
-
-        if (env_ca_value != NULL) {
-            curl_easy_setopt(curl, CURLOPT_CAINFO, env_ca_value);
-        } else {
+        if (env_ca_value == NULL) {
             fprintf(stderr, "Environment variable %s is not set.\n", env_ca_name);
-            curl_easy_cleanup(curl);
-            free(chunk.memory);
-            curl_global_cleanup();
-            return -1;
+            exit(EXIT_FAILURE);
         }
 #endif
 
-        // Ignore certificate validation errors if needed (equivalent to -k flag)
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+        // Construct the exec arguments
+#ifdef STATIC_CREDENTIALS
+        execlp("curl", "curl",
+               "-s", // Silent mode
+               "-k", // Insecure, skip SSL verification
+               "--cert", ssl_cert,
+               "--key", ssl_key,
+               "--cacert", cacert,
+               "-X", "GET",
+               qkd_url,
+               NULL);
+#else
+        execlp("curl", "curl",
+               "-s", // Silent mode
+               "-k", // Insecure, skip SSL verification
+               "--cert", env_ssl_cert_value,
+               "--key", env_ssl_key_value,
+               "--cacert", env_ca_value,
+               "-X", "GET",
+               qkd_url,
+               NULL);
+#endif
 
-        // Set up callback function to capture the response
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+        // If execlp returns, it failed
+        fprintf(stderr, "Failed to execute curl: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+    } else {
+        // Parent process
+        close(pipefd[1]); // Close unused write end
 
-        // Perform the request
-        res = curl_easy_perform(curl);
+        // Read from the pipe
+        while ((bytes_read = read(pipefd[0], output + output_size, buffer_size - output_size - 1)) > 0) {
+            output_size += bytes_read;
+            // Reallocate buffer if needed
+            if (output_size >= buffer_size - 1) {
+                buffer_size *= 2;
+                char *temp = realloc(output, buffer_size);
+                if (temp == NULL) {
+                    fprintf(stderr, "get_key_from_qkd: realloc() failed\n");
+                    close(pipefd[0]);
+                    free(output);
+                    return -1;
+                }
+                output = temp;
+            }
+        }
 
-        if (res != CURLE_OK) {
-            fprintf(stderr, "get_key_from_qkd: curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-            // Handle the error
-            curl_easy_cleanup(curl);
-            free(chunk.memory);
-            curl_global_cleanup();
+        if (bytes_read == -1) {
+            fprintf(stderr, "get_key_from_qkd: read() failed: %s\n", strerror(errno));
+            close(pipefd[0]);
+            free(output);
             return -1;
-        } else {
-            // Parse the JSON response
-            struct json_object *parsed_json;
-            struct json_object *keys_array;
-            struct json_object *key_obj;
-            struct json_object *key_str_obj;
-            struct json_object *key_id_obj;
+        }
 
-            parsed_json = json_tokener_parse(chunk.memory);
-            if (parsed_json == NULL) {
-                fprintf(stderr, "get_key_from_qkd: Failed to parse JSON response\n");
-                // Handle the error
-                curl_easy_cleanup(curl);
-                free(chunk.memory);
-                curl_global_cleanup();
-                return -1;
-            } else {
-                if (json_object_object_get_ex(parsed_json, "keys", &keys_array)) {
-                    size_t n_keys = json_object_array_length(keys_array);
-                    if (n_keys > 0) {
-                        key_obj = json_object_array_get_idx(keys_array, 0);
-                        if (json_object_object_get_ex(key_obj, "key", &key_str_obj) &&
-                            json_object_object_get_ex(key_obj, "key_ID", &key_id_obj)) {
+        // Null-terminate the output
+        output[output_size] = '\0';
 
-                            const char *key_b64_str = json_object_get_string(key_str_obj);
-                            const char *key_id_str = json_object_get_string(key_id_obj);
+        close(pipefd[0]);
 
-                            // Base64 decode the key
-                            unsigned char *key_data = NULL;
-                            size_t key_data_len = 0;
-                            if (Base64Decode(key_b64_str, &key_data, &key_data_len) == 0) {
-                                if (key_data_len != KEY_LENGTH) {
-                                    fprintf(stderr, "get_key_from_qkd: Invalid key length after Base64 decoding\n");
-                                    free(key_data);
-                                    json_object_put(parsed_json);
-                                    curl_easy_cleanup(curl);
-                                    free(chunk.memory);
-                                    curl_global_cleanup();
-                                    return -1;
-                                } else {
-                                    memcpy(key->key, key_data, KEY_LENGTH);
-                                    free(key_data);
-                                }
-                            } else {
-                                fprintf(stderr, "get_key_from_qkd: Failed to decode Base64 key\n");
-                                json_object_put(parsed_json);
-                                curl_easy_cleanup(curl);
-                                free(chunk.memory);
-                                curl_global_cleanup();
-                                return -1;
-                            }
+        // Wait for the child process to finish
+        if (waitpid(pid, &status, 0) == -1) {
+            fprintf(stderr, "get_key_from_qkd: waitpid() failed: %s\n", strerror(errno));
+            free(output);
+            return -1;
+        }
 
-                            // Convert UUID string to bytes
-                            if (UUIDStringToBytes(key_id_str, key->key_id) != 0) {
-                                fprintf(stderr, "get_key_from_qkd: Failed to convert key_ID to bytes\n");
-                                json_object_put(parsed_json);
-                                curl_easy_cleanup(curl);
-                                free(chunk.memory);
-                                curl_global_cleanup();
-                                return -1;
-                            }
-                        } else {
-                            fprintf(stderr, "get_key_from_qkd: JSON key object does not contain expected fields\n");
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            fprintf(stderr, "get_key_from_qkd: curl command failed with status %d\n", WEXITSTATUS(status));
+            fprintf(stderr, "Curl output: %s\n", output);
+            free(output);
+            return -1;
+        }
+
+        // Parse the JSON response
+        struct json_object *parsed_json = json_tokener_parse(output);
+        if (parsed_json == NULL) {
+            fprintf(stderr, "get_key_from_qkd: Failed to parse JSON response\n");
+            free(output);
+            return -1;
+        }
+
+        struct json_object *keys_array;
+        struct json_object *key_obj;
+        struct json_object *key_str_obj;
+        struct json_object *key_id_obj;
+
+        if (json_object_object_get_ex(parsed_json, "keys", &keys_array)) {
+            size_t n_keys = json_object_array_length(keys_array);
+            if (n_keys > 0) {
+                key_obj = json_object_array_get_idx(keys_array, 0);
+                if (json_object_object_get_ex(key_obj, "key", &key_str_obj) &&
+                    json_object_object_get_ex(key_obj, "key_ID", &key_id_obj)) {
+
+                    const char *key_b64_str = json_object_get_string(key_str_obj);
+                    const char *key_id_str = json_object_get_string(key_id_obj);
+
+                    // Base64 decode the key
+                    unsigned char *key_data = NULL;
+                    size_t key_data_len = 0;
+                    if (Base64Decode(key_b64_str, &key_data, &key_data_len) == 0) {
+                        if (key_data_len != sizeof(key->key)) { // Assuming QKD_KEY_LENGTH is 32
+                            fprintf(stderr, "get_key_from_qkd: Invalid key length after Base64 decoding\n");
+                            free(key_data);
                             json_object_put(parsed_json);
-                            curl_easy_cleanup(curl);
-                            free(chunk.memory);
-                            curl_global_cleanup();
+                            free(output);
                             return -1;
+                        } else {
+                            memcpy(key->key, key_data, sizeof(key->key));
+                            free(key_data);
                         }
                     } else {
-                        fprintf(stderr, "get_key_from_qkd: No keys available in response\n");
+                        fprintf(stderr, "get_key_from_qkd: Failed to decode Base64 key\n");
                         json_object_put(parsed_json);
-                        curl_easy_cleanup(curl);
-                        free(chunk.memory);
-                        curl_global_cleanup();
+                        free(output);
+                        return -1;
+                    }
+
+                    // Convert UUID string to bytes
+                    if (UUIDStringToBytes(key_id_str, key->key_id) != 0) {
+                        fprintf(stderr, "get_key_from_qkd: Failed to convert key_ID to bytes\n");
+                        json_object_put(parsed_json);
+                        free(output);
                         return -1;
                     }
                 } else {
-                    fprintf(stderr, "get_key_from_qkd: JSON response does not contain 'keys' array\n");
+                    fprintf(stderr, "get_key_from_qkd: JSON key object does not contain expected fields\n");
                     json_object_put(parsed_json);
-                    curl_easy_cleanup(curl);
-                    free(chunk.memory);
-                    curl_global_cleanup();
+                    free(output);
                     return -1;
                 }
-
-                // Free JSON object
+            } else {
+                fprintf(stderr, "get_key_from_qkd: No keys available in response\n");
                 json_object_put(parsed_json);
+                free(output);
+                return -1;
             }
-
-            // Clean up
-            curl_easy_cleanup(curl);
+        } else {
+            fprintf(stderr, "get_key_from_qkd: JSON response does not contain 'keys' array\n");
+            json_object_put(parsed_json);
+            free(output);
+            return -1;
         }
 
-        // Clean up the memory chunk
-        if (chunk.memory) {
-            free(chunk.memory);
-        }
-
-        curl_global_cleanup();
+        // Free JSON object and output buffer
+        json_object_put(parsed_json);
+        free(output);
 
         return 0; // Success
-    } else {
-        fprintf(stderr, "get_key_from_qkd: curl_easy_init() failed\n");
-        curl_global_cleanup();
-        return -1;
     }
 }
 
@@ -331,16 +514,54 @@ int qkd_get_key_by_id(QKD_Credential *cred, const uint8_t key_id[KEY_ID_LENGTH],
 
     memset(key, 0, sizeof(QKD_Key));
 
-    CURL *curl;
-    CURLcode res;
-    struct MemoryStruct chunk;
+    int pipefd[2];
+    pid_t pid;
+    int status;
+    ssize_t bytes_read;
+    size_t buffer_size = 4096; // Initial buffer size
+    size_t output_size = 0;
+    char *output = NULL;
 
-    chunk.memory = (char *)malloc(1);  // Will be grown as needed by realloc
-    chunk.size = 0;            // No data at this point
+    // Allocate initial memory for output
+    output = malloc(buffer_size);
+    if (output == NULL) {
+        fprintf(stderr, "qkd_get_key_by_id: Failed to allocate memory\n");
+        return -1;
+    }
 
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-    curl = curl_easy_init();
-    if (curl) {
+    // Create a pipe
+    if (pipe(pipefd) == -1) {
+        fprintf(stderr, "qkd_get_key_by_id: pipe() failed: %s\n", strerror(errno));
+        free(output);
+        return -1;
+    }
+
+    // Fork the process
+    pid = fork();
+    if (pid == -1) {
+        fprintf(stderr, "qkd_get_key_by_id: fork() failed: %s\n", strerror(errno));
+        close(pipefd[0]);
+        close(pipefd[1]);
+        free(output);
+        return -1;
+    }
+
+    if (pid == 0) {
+        // Child process
+        // Redirect stdout to pipe's write end
+        close(pipefd[0]); // Close unused read end
+        if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
+            fprintf(stderr, "qkd_get_key_by_id_ (child): dup2() failed: %s\n", strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+        // Redirect stderr to pipe's write end (optional)
+        if (dup2(pipefd[1], STDERR_FILENO) == -1) {
+            fprintf(stderr, "qkd_get_key_by_id_ (child): dup2() failed: %s\n", strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+        close(pipefd[1]); // Close original write end after duplicating
+
+        // Determine QKD IP and port
 #ifdef STATIC_CREDENTIALS
         const char *qkd_ipport_value = STATIC_DEC_IPPORT;
 #else
@@ -349,228 +570,224 @@ int qkd_get_key_by_id(QKD_Credential *cred, const uint8_t key_id[KEY_ID_LENGTH],
         char *qkd_ipport_value = getenv(env_qkd_ipport_name);
         if (qkd_ipport_value == NULL) {
             fprintf(stderr, "Environment variable %s is not set.\n", env_qkd_ipport_name);
-            curl_easy_cleanup(curl);
-            free(chunk.memory);
-            curl_global_cleanup();
-            return -1;
+            exit(EXIT_FAILURE);
         }
 #endif
 
         // Build the URL
         char qkd_url[256];
-        snprintf(qkd_url, sizeof(qkd_url), "https://%s/api/v1/keys/" DEC_SAE_ID "/dec_keys", qkd_ipport_value);
-        curl_easy_setopt(curl, CURLOPT_URL, qkd_url);
+        snprintf(qkd_url, sizeof(qkd_url), "https://%s/api/v1/keys/%s/dec_keys", qkd_ipport_value, DEC_SAE_ID);
 
-        // Set SSL options
-#ifdef STATIC_CREDENTIALS
-        const char *ssl_cert = "./qkd.crt";
-        curl_easy_setopt(curl, CURLOPT_SSLCERT, ssl_cert);
-
-        const char *ssl_key = "./qkd-new.key";
-        curl_easy_setopt(curl, CURLOPT_SSLKEY, ssl_key);
-
-        const char *cacert = "./qkd-ca.crt";
-        curl_easy_setopt(curl, CURLOPT_CAINFO, cacert);
-#else
-        const char *env_ssl_cert_name = "QKD_SSL_CERT";
-        char *env_ssl_cert_value = getenv(env_ssl_cert_name);
-
-        if (env_ssl_cert_value != NULL) {
-            curl_easy_setopt(curl, CURLOPT_SSLCERT, env_ssl_cert_value);
-        } else {
-            fprintf(stderr, "Environment variable %s is not set.\n", env_ssl_cert_name);
-            curl_easy_cleanup(curl);
-            free(chunk.memory);
-            curl_global_cleanup();
-            return -1;
-        }
-
-        const char *env_ssl_key_name = "QKD_SSL_CERT";
-        char *env_ssl_key_value = getenv(env_ssl_key_name);
-
-        if (env_ssl_key_value != NULL) {
-            curl_easy_setopt(curl, CURLOPT_SSLKEY, env_ssl_key_value);
-        } else {
-            fprintf(stderr, "Environment variable %s is not set.\n", env_ssl_key_name);
-            curl_easy_cleanup(curl);
-            free(chunk.memory);
-            curl_global_cleanup();
-            return -1;
-        }
-
-        const char *env_ca_name = "QKD_SSL_CERT";
-        char *env_ca_value = getenv(env_ca_name);
-
-        if (env_ca_value != NULL) {
-            curl_easy_setopt(curl, CURLOPT_CAINFO, env_ca_value);
-        } else {
-            fprintf(stderr, "Environment variable %s is not set.\n", env_ca_name);
-            curl_easy_cleanup(curl);
-            free(chunk.memory);
-            curl_global_cleanup();
-            return -1;
-        }
-#endif
-
-        // Ignore certificate validation errors if needed (equivalent to -k flag)
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-
-        // Prepare the POST data with key ID
-        // Convert key_id (binary data) to UUID string
-        char key_id_str[37]; // UUIDs are 36 characters plus null terminator
-        uuid_unparse(key_id, key_id_str);
+        // Build the JSON payload
+        // Convert key_id (binary) to UUID string
+        char key_id_str[37]; // UUID string is 36 characters + null terminator
+        UUIDBytesToString(key_id, key_id_str);
 
         // Prepare JSON data
         char post_data[256];
         snprintf(post_data, sizeof(post_data), "{ \"key_IDs\":[{ \"key_ID\": \"%s\" }] }", key_id_str);
 
-        // Set POST method
-        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        // Determine SSL certificate paths
+#ifdef STATIC_CREDENTIALS
+        const char *ssl_cert = "./qkd.crt";
+        const char *ssl_key = "./qkd-new.key";
+        const char *cacert = "./qkd-ca.crt";
+#else
+        // Get SSL cert paths from environment variables
+        const char *env_ssl_cert_name = "QKD_SSL_CERT";
+        char *env_ssl_cert_value = getenv(env_ssl_cert_name);
+        if (env_ssl_cert_value == NULL) {
+            fprintf(stderr, "Environment variable %s is not set.\n", env_ssl_cert_name);
+            exit(EXIT_FAILURE);
+        }
 
-        // Set headers
-        struct curl_slist *headers = NULL;
-        headers = curl_slist_append(headers, "Content-Type: application/json");
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        const char *env_ssl_key_name = "QKD_SSL_KEY"; // Corrected variable name
+        char *env_ssl_key_value = getenv(env_ssl_key_name);
+        if (env_ssl_key_value == NULL) {
+            fprintf(stderr, "Environment variable %s is not set.\n", env_ssl_key_name);
+            exit(EXIT_FAILURE);
+        }
 
-        // Set POST data
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_data);
+        const char *env_ca_name = "QKD_CA_CERT"; // Corrected variable name
+        char *env_ca_value = getenv(env_ca_name);
+        if (env_ca_value == NULL) {
+            fprintf(stderr, "Environment variable %s is not set.\n", env_ca_name);
+            exit(EXIT_FAILURE);
+        }
+#endif
 
-        // Set up callback function to capture the response
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+        // Construct the curl command
+#ifdef STATIC_CREDENTIALS
+        execlp("curl", "curl",
+               "-s",              // Silent mode
+               "-k",              // Insecure, skip SSL verification
+               "--cert", ssl_cert,
+               "--key", ssl_key,
+               "--cacert", cacert,
+               "-X", "POST",
+               "-H", "Content-Type: application/json",
+               "-d", post_data,
+               qkd_url,
+               NULL);
+#else
+        execlp("curl", "curl",
+               "-s",              // Silent mode
+               "-k",              // Insecure, skip SSL verification
+               "--cert", env_ssl_cert_value,
+               "--key", env_ssl_key_value,
+               "--cacert", env_ca_value,
+               "-X", "POST",
+               "-H", "Content-Type: application/json",
+               "-d", post_data,
+               qkd_url,
+               NULL);
+#endif
 
-        // Perform the request
-        res = curl_easy_perform(curl);
+        // If execlp returns, it failed
+        fprintf(stderr, "qkd_get_key_by_id: Failed to execute curl: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+    } else {
+        // Parent process
+        close(pipefd[1]); // Close unused write end
 
-        if (res != CURLE_OK) {
-            fprintf(stderr, "get_key_by_id: curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-            // Clean up
-            curl_easy_cleanup(curl);
-            curl_slist_free_all(headers);
-            free(chunk.memory);
-            curl_global_cleanup();
+        // Initialize output buffer
+        output = malloc(buffer_size);
+        if (output == NULL) {
+            fprintf(stderr, "qkd_get_key_by_id: Failed to allocate memory for output\n");
+            close(pipefd[0]);
             return -1;
-        } else {
-            // Parse the JSON response
-            struct json_object *parsed_json;
-            struct json_object *keys_array;
-            struct json_object *key_obj;
-            struct json_object *key_str_obj;
-            struct json_object *key_id_obj;
+        }
+        memset(output, 0, buffer_size);
 
-            parsed_json = json_tokener_parse(chunk.memory);
-            if (parsed_json == NULL) {
-                fprintf(stderr, "get_key_by_id: Failed to parse JSON response\n");
-                // Clean up
-                curl_easy_cleanup(curl);
-                curl_slist_free_all(headers);
-                free(chunk.memory);
-                curl_global_cleanup();
-                return -1;
-            } else {
-                if (json_object_object_get_ex(parsed_json, "keys", &keys_array)) {
-                    size_t n_keys = json_object_array_length(keys_array);
-                    if (n_keys > 0) {
-                        key_obj = json_object_array_get_idx(keys_array, 0);
-                        if (json_object_object_get_ex(key_obj, "key", &key_str_obj) &&
-                            json_object_object_get_ex(key_obj, "key_ID", &key_id_obj)) {
-
-                            const char *key_b64_str = json_object_get_string(key_str_obj);
-                            const char *key_id_response_str = json_object_get_string(key_id_obj);
-
-                            // Base64 decode the key
-                            unsigned char *key_data = NULL;
-                            size_t key_data_len = 0;
-                            if (Base64Decode(key_b64_str, &key_data, &key_data_len) == 0) {
-                                if (key_data_len != KEY_LENGTH) {
-                                    fprintf(stderr, "get_key_by_id: Invalid key length after Base64 decoding\n");
-                                    free(key_data);
-                                    json_object_put(parsed_json);
-                                    curl_easy_cleanup(curl);
-                                    curl_slist_free_all(headers);
-                                    free(chunk.memory);
-                                    curl_global_cleanup();
-                                    return -1;
-                                } else {
-                                    memcpy(key->key, key_data, KEY_LENGTH);
-                                    free(key_data);
-                                }
-                            } else {
-                                fprintf(stderr, "get_key_by_id: Failed to decode Base64 key\n");
-                                json_object_put(parsed_json);
-                                curl_easy_cleanup(curl);
-                                curl_slist_free_all(headers);
-                                free(chunk.memory);
-                                curl_global_cleanup();
-                                return -1;
-                            }
-
-                            // Convert key_ID in response back to bytes and compare with requested key_id
-                            uint8_t response_key_id[KEY_ID_LENGTH];
-                            if (UUIDStringToBytes(key_id_response_str, response_key_id) != 0) {
-                                fprintf(stderr, "get_key_by_id: Failed to convert response key_ID to bytes\n");
-                                json_object_put(parsed_json);
-                                curl_easy_cleanup(curl);
-                                curl_slist_free_all(headers);
-                                free(chunk.memory);
-                                curl_global_cleanup();
-                                return -1;
-                            }
-                            if (memcmp(response_key_id, key_id, KEY_ID_LENGTH) != 0) {
-                                fprintf(stderr, "get_key_by_id: Response key_ID does not match requested key_ID\n");
-                                json_object_put(parsed_json);
-                                curl_easy_cleanup(curl);
-                                curl_slist_free_all(headers);
-                                free(chunk.memory);
-                                curl_global_cleanup();
-                                return -1;
-                            }
-                            // Store the key_id
-                            memcpy(key->key_id, key_id, KEY_ID_LENGTH);
-
-                        } else {
-                            fprintf(stderr, "get_key_by_id: JSON key object does not contain expected fields\n");
-                            json_object_put(parsed_json);
-                            curl_easy_cleanup(curl);
-                            curl_slist_free_all(headers);
-                            free(chunk.memory);
-                            curl_global_cleanup();
-                            return -1;
-                        }
-                    } else {
-                        fprintf(stderr, "get_key_by_id: No keys available in response\n");
-                        json_object_put(parsed_json);
-                        curl_easy_cleanup(curl);
-                        curl_slist_free_all(headers);
-                        free(chunk.memory);
-                        curl_global_cleanup();
-                        return -1;
-                    }
-                } else {
-                    fprintf(stderr, "get_key_by_id: JSON response does not contain 'keys' array\n");
-                    json_object_put(parsed_json);
-                    curl_easy_cleanup(curl);
-                    curl_slist_free_all(headers);
-                    free(chunk.memory);
-                    curl_global_cleanup();
+        // Read from the pipe
+        while ((bytes_read = read(pipefd[0], output + output_size, buffer_size - output_size - 1)) > 0) {
+            output_size += bytes_read;
+            // Reallocate buffer if needed
+            if (output_size >= buffer_size - 1) {
+                buffer_size *= 2;
+                char *temp = realloc(output, buffer_size);
+                if (temp == NULL) {
+                    fprintf(stderr, "qkd_get_key_by_id: realloc() failed\n");
+                    free(output);
+                    close(pipefd[0]);
                     return -1;
                 }
-                // Free JSON object
-                json_object_put(parsed_json);
+                output = temp;
             }
         }
 
-        // Clean up
-        curl_easy_cleanup(curl);
-        curl_slist_free_all(headers);
-        if (chunk.memory) free(chunk.memory);
-        curl_global_cleanup();
+        if (bytes_read == -1) {
+            fprintf(stderr, "qkd_get_key_by_id: read() failed: %s\n", strerror(errno));
+            free(output);
+            close(pipefd[0]);
+            return -1;
+        }
+
+        // Null-terminate the output
+        output[output_size] = '\0';
+        close(pipefd[0]);
+
+        // Wait for the child process to finish
+        if (waitpid(pid, &status, 0) == -1) {
+            fprintf(stderr, "qkd_get_key_by_id: waitpid() failed: %s\n", strerror(errno));
+            free(output);
+            return -1;
+        }
+
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            fprintf(stderr, "qkd_get_key_by_id: curl command failed with status %d\n", WEXITSTATUS(status));
+            fprintf(stderr, "Curl output: %s\n", output);
+            free(output);
+            return -1;
+        }
+
+        if (output_size == 0) {
+            fprintf(stderr, "qkd_get_key_by_id: No output received from curl command\n");
+            free(output);
+            return -1;
+        }
+
+        // Parse the JSON response
+        struct json_object *parsed_json = json_tokener_parse(output);
+        free(output);
+        if (parsed_json == NULL) {
+            fprintf(stderr, "qkd_get_key_by_id: Failed to parse JSON response\n");
+            return -1;
+        }
+
+        struct json_object *keys_array;
+        struct json_object *key_obj;
+        struct json_object *key_str_obj;
+        struct json_object *key_id_obj;
+
+        if (json_object_object_get_ex(parsed_json, "keys", &keys_array)) {
+            size_t n_keys = json_object_array_length(keys_array);
+            if (n_keys > 0) {
+                key_obj = json_object_array_get_idx(keys_array, 0);
+                if (json_object_object_get_ex(key_obj, "key", &key_str_obj) &&
+                    json_object_object_get_ex(key_obj, "key_ID", &key_id_obj)) {
+
+                    const char *key_b64_str = json_object_get_string(key_str_obj);
+                    const char *key_id_response_str = json_object_get_string(key_id_obj);
+
+                    if (key_b64_str == NULL || key_id_response_str == NULL) {
+                        fprintf(stderr, "qkd_get_key_by_id: 'key' or 'key_ID' field is missing in JSON response\n");
+                        json_object_put(parsed_json);
+                        return -1;
+                    }
+
+                    // Base64 decode the key
+                    unsigned char *key_data = NULL;
+                    size_t key_data_len = 0;
+                    if (Base64Decode(key_b64_str, &key_data, &key_data_len) != 0) {
+                        fprintf(stderr, "qkd_get_key_by_id: Failed to decode Base64 key\n");
+                        json_object_put(parsed_json);
+                        return -1;
+                    }
+
+                    if (key_data_len != KEY_LENGTH) {
+                        fprintf(stderr, "qkd_get_key_by_id: Invalid key length after Base64 decoding\n");
+                        free(key_data);
+                        json_object_put(parsed_json);
+                        return -1;
+                    }
+
+                    memcpy(key->key, key_data, KEY_LENGTH);
+                    free(key_data);
+
+                    // Convert UUID string to bytes
+                    if (UUIDStringToBytes(key_id_response_str, key->key_id) != 0) {
+                        fprintf(stderr, "qkd_get_key_by_id: Failed to convert key_ID to bytes\n");
+                        json_object_put(parsed_json);
+                        return -1;
+                    }
+
+                    // Verify that the returned key_id matches the requested key_id
+                    if (memcmp(key->key_id, key_id, KEY_ID_LENGTH) != 0) {
+                        fprintf(stderr, "qkd_get_key_by_id: Response key_ID does not match requested key_ID\n");
+                        json_object_put(parsed_json);
+                        return -1;
+                    }
+
+                } else {
+                    fprintf(stderr, "qkd_get_key_by_id: JSON key object does not contain expected fields\n");
+                    json_object_put(parsed_json);
+                    return -1;
+                }
+            } else {
+                fprintf(stderr, "qkd_get_key_by_id: No keys available in response\n");
+                json_object_put(parsed_json);
+                return -1;
+            }
+        } else {
+            fprintf(stderr, "qkd_get_key_by_id: JSON response does not contain 'keys' array\n");
+            json_object_put(parsed_json);
+            return -1;
+        }
+
+        // Free JSON object
+        json_object_put(parsed_json);
 
         return 0; // Success
-    } else {
-        fprintf(stderr, "get_key_by_id: curl_easy_init() failed\n");
-        curl_global_cleanup();
-        return -1;
     }
 }
