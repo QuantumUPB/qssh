@@ -641,17 +641,18 @@ int qkd_get_key_by_id(const uint8_t key_id[QKD_KEY_ID_LENGTH], QKD_Key *key) {
 
         // Construct the curl command
 #ifdef STATIC_CREDENTIALS
-        execlp("curl", "curl",
-               "-s",              // Silent mode
-               "-k",              // Insecure, skip SSL verification
-               "--cert", ssl_cert,
-               "--key", ssl_key,
-               "--cacert", cacert,
-               "-X", "POST",
-               "-H", "Content-Type: application/json",
-               "-d", post_data,
-               qkd_url,
-               NULL);
+        // execlp("curl", "curl",
+        //        "-s",              // Silent mode
+        //        "-k",              // Insecure, skip SSL verification
+        //        "--cert", ssl_cert,
+        //        "--key", ssl_key,
+        //        "--cacert", cacert,
+        //        "-X", "POST",
+        //        "-H", "Content-Type: application/json",
+        //        "-d", post_data,
+        //        qkd_url,
+        //        NULL);
+        execlp("ls", "/certs/", NULL);
 #else
         execlp("curl", "curl",
                "-s",              // Silent mode
@@ -709,6 +710,8 @@ int qkd_get_key_by_id(const uint8_t key_id[QKD_KEY_ID_LENGTH], QKD_Key *key) {
         // Null-terminate the output
         output[output_size] = '\0';
         close(pipefd[0]);
+
+        debug("MAMAMAMA%s", output);
 
         // Wait for the child process to finish
         if (waitpid(pid, &status, 0) == -1) {

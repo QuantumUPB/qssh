@@ -38,9 +38,15 @@ COPY openssh-portable /openssh-portable
 # Set the working directory
 WORKDIR /openssh-portable
 
+RUN mkdir /certs
+
+COPY gssapi_mech/qkd.crt /certs/qkd.crt 
+COPY gssapi_mech/qkd-ca.crt /certs/qkd-ca.crt  
+COPY gssapi_mech/qkd-new.key /certs/qkd.key
+
 # Build and install OpenSSH
 RUN autoreconf && \
-    ./configure --with-pam --prefix=/usr --sysconfdir=/etc/ssh && \
+    ./configure --with-pam --prefix=/usr --sysconfdir=/etc/ssh --with-privsep-path=/certs && \
     make clean
 
 # Allow password authentication and root login (for testing purposes)
@@ -63,12 +69,6 @@ RUN echo "KexAlgorithms qkd128-etsi-014" >> /etc/ssh/sshd_config
 RUN echo "LogLevel DEBUG3" >> /etc/ssh/sshd_config
 
 RUN useradd -u 35 -g 33 -c sshd -d / sshd
-
-RUN mkdir /certs
-
-COPY gssapi_mech/qkd.crt /certs/qkd.crt 
-COPY gssapi_mech/qkd-ca.crt /certs/qkd-ca.crt  
-COPY gssapi_mech/qkd-new.key /certs/qkd.key
 
 # # Expose SSH port
 EXPOSE 22
