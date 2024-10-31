@@ -150,17 +150,17 @@ static int
 fdlim_set(int lim)
 {
 #if defined(HAVE_SETRLIMIT) && defined(RLIMIT_NOFILE)
-	struct rlimit rlfd;
+	// struct rlimit rlfd;
 #endif
 
 	if (lim <= 0)
 		return (-1);
 #if defined(HAVE_SETRLIMIT) && defined(RLIMIT_NOFILE)
-	if (getrlimit(RLIMIT_NOFILE, &rlfd) == -1)
-		return (-1);
-	rlfd.rlim_cur = lim;
-	if (setrlimit(RLIMIT_NOFILE, &rlfd) == -1)
-		return (-1);
+	// if (getrlimit(RLIMIT_NOFILE, &rlfd) == -1)
+	// 	return (-1);
+	// rlfd.rlim_cur = lim;
+	// if (setrlimit(RLIMIT_NOFILE, &rlfd) == -1)
+	// 	return (-1);
 #elif defined (HAVE_SETDTABLESIZE)
 	setdtablesize(lim);
 #endif
