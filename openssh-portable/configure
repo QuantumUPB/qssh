@@ -20017,7 +20017,9 @@ LIBS="$saved_LIBS"
 PAM_MSG="no"
 
 # add libs for qkd
-LIBS="-lcurl -ljson-c -lssl -lcrypto -luuid $LIBS"
+# -Wl,--no-as-needed 
+LIBS="-ljson-c $LIBS"
+# SSHDLIBS="-lcurl -ljson-c -lssl -lcrypto -luuid $SSHDLIBS"
 
 # Check whether --with-pam was given.
 if test ${with_pam+y}

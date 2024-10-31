@@ -490,39 +490,39 @@ ssh_sandbox_child(struct ssh_sandbox *box)
 	struct rlimit rl_zero, rl_one = {.rlim_cur = 1, .rlim_max = 1};
 	int nnp_failed = 0;
 
-	/* Set rlimits for completeness if possible. */
-	rl_zero.rlim_cur = rl_zero.rlim_max = 0;
-	if (setrlimit(RLIMIT_FSIZE, &rl_zero) == -1)
-		fatal("%s: setrlimit(RLIMIT_FSIZE, { 0, 0 }): %s",
-			__func__, strerror(errno));
-	/*
-	 * Cannot use zero for nfds, because poll(2) will fail with
-	 * errno=EINVAL if npfds>RLIMIT_NOFILE.
-	 */
-	if (setrlimit(RLIMIT_NOFILE, &rl_one) == -1)
-		fatal("%s: setrlimit(RLIMIT_NOFILE, { 0, 0 }): %s",
-			__func__, strerror(errno));
-	if (setrlimit(RLIMIT_NPROC, &rl_zero) == -1)
-		fatal("%s: setrlimit(RLIMIT_NPROC, { 0, 0 }): %s",
-			__func__, strerror(errno));
+	// /* Set rlimits for completeness if possible. */
+	// rl_zero.rlim_cur = rl_zero.rlim_max = 0;
+	// if (setrlimit(RLIMIT_FSIZE, &rl_zero) == -1)
+	// 	fatal("%s: setrlimit(RLIMIT_FSIZE, { 0, 0 }): %s",
+	// 		__func__, strerror(errno));
+	// /*
+	//  * Cannot use zero for nfds, because poll(2) will fail with
+	//  * errno=EINVAL if npfds>RLIMIT_NOFILE.
+	//  */
+	// if (setrlimit(RLIMIT_NOFILE, &rl_one) == -1)
+	// 	fatal("%s: setrlimit(RLIMIT_NOFILE, { 0, 0 }): %s",
+	// 		__func__, strerror(errno));
+	// if (setrlimit(RLIMIT_NPROC, &rl_zero) == -1)
+	// 	fatal("%s: setrlimit(RLIMIT_NPROC, { 0, 0 }): %s",
+	// 		__func__, strerror(errno));
 
 #ifdef SANDBOX_SECCOMP_FILTER_DEBUG
 	ssh_sandbox_child_debugging();
 #endif /* SANDBOX_SECCOMP_FILTER_DEBUG */
 
 	debug3("%s: setting PR_SET_NO_NEW_PRIVS", __func__);
-	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == -1) {
-		debug("%s: prctl(PR_SET_NO_NEW_PRIVS): %s",
-		    __func__, strerror(errno));
-		nnp_failed = 1;
-	}
+	// if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == -1) {
+	// 	debug("%s: prctl(PR_SET_NO_NEW_PRIVS): %s",
+	// 	    __func__, strerror(errno));
+	// 	nnp_failed = 1;
+	// }
 	debug3("%s: attaching seccomp filter program", __func__);
-	if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &preauth_program) == -1)
-		debug("%s: prctl(PR_SET_SECCOMP): %s",
-		    __func__, strerror(errno));
-	else if (nnp_failed)
-		fatal("%s: SECCOMP_MODE_FILTER activated but "
-		    "PR_SET_NO_NEW_PRIVS failed", __func__);
+	// if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &preauth_program) == -1)
+	// 	debug("%s: prctl(PR_SET_SECCOMP): %s",
+	// 	    __func__, strerror(errno));
+	// else if (nnp_failed)
+	// 	fatal("%s: SECCOMP_MODE_FILTER activated but "
+	// 	    "PR_SET_NO_NEW_PRIVS failed", __func__);
 }
 
 #endif /* SANDBOX_SECCOMP_FILTER */
