@@ -517,12 +517,12 @@ ssh_sandbox_child(struct ssh_sandbox *box)
 		nnp_failed = 1;
 	}
 	debug3("%s: attaching seccomp filter program", __func__);
-	if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &preauth_program) == -1)
-		debug("%s: prctl(PR_SET_SECCOMP): %s",
-		    __func__, strerror(errno));
-	else if (nnp_failed)
-		fatal("%s: SECCOMP_MODE_FILTER activated but "
-		    "PR_SET_NO_NEW_PRIVS failed", __func__);
+	// if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &preauth_program) == -1)
+	// 	debug("%s: prctl(PR_SET_SECCOMP): %s",
+	// 	    __func__, strerror(errno));
+	// else if (nnp_failed)
+	// 	fatal("%s: SECCOMP_MODE_FILTER activated but "
+	// 	    "PR_SET_NO_NEW_PRIVS failed", __func__);
 }
 
 #endif /* SANDBOX_SECCOMP_FILTER */
