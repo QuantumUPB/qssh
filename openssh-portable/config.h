@@ -1835,13 +1835,13 @@
 /* #undef SANDBOX_RLIMIT */
 
 /* Sandbox using seccomp filter */
-#define SANDBOX_SECCOMP_FILTER 1
+// #define SANDBOX_SECCOMP_FILTER 1
 
 /* setrlimit RLIMIT_FSIZE works */
 /* #undef SANDBOX_SKIP_RLIMIT_FSIZE */
 
 /* define if setrlimit RLIMIT_NOFILE breaks things */
-/* #undef SANDBOX_SKIP_RLIMIT_NOFILE */
+#undef SANDBOX_SKIP_RLIMIT_NOFILE 
 
 /* Sandbox using Solaris/Illumos privileges */
 /* #undef SANDBOX_SOLARIS */

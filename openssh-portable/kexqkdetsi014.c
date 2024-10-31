@@ -667,17 +667,25 @@ int kex_qkd128_etsi_014_enc(struct kex *kex, const struct sshbuf *client_blob,
 	}
 	key_id = sshbuf_ptr(client_blob);
 
-    // QKD_Key key_by_id;
-    // if (qkd_get_key_by_id(key_id, &key_by_id) == 0) {
-    //     // Print key data
-    //     debug("Retrieved Key Data by ID: ");
-    //     for (int i = 0; i < QKD_KEY_LENGTH; i++) {
-    //         debug("%02x", key_by_id.key[i]);
-    //     }
-    //     debug("\n");
-    // } else {
-    //     debug("Failed to retrieve key by ID from QKD device\n");
-    // }
+    debug("Key ID: ");
+    for (int i = 0; i < QKD_KEY_ID_LENGTH; i++) {
+        debug("%02x", key_id[i]);
+    }
+    QKD_Key key_by_id;
+    if (qkd_get_key_by_id(key_id, &key_by_id) == 0) {
+        // Print key data
+        debug("Retrieved Key Data by ID: ");
+        for (int i = 0; i < QKD_KEY_LENGTH; i++) {
+            debug("%02x", key_by_id.key[i]);
+        }
+        debug("\n");
+    } else {
+        debug("Failed to retrieve key by ID from QKD device\n");
+    }
+    debug("\nKey Data: ");
+    for (int i = 0; i < QKD_KEY_LENGTH; i++) {
+        debug("%02x", key_by_id.key[i]);
+    }
 
     need = QKD_KEY_SIZE;
 	if ((server_blob = sshbuf_new()) == NULL) {
@@ -702,11 +710,6 @@ int kex_qkd128_etsi_014_enc(struct kex *kex, const struct sshbuf *client_blob,
 	if ((r = sshbuf_put(buf, actual_key,
 	    need)) != 0)
 		goto out;
-
-    debug("Key ID: ");
-    for (int i = 0; i < QKD_KEY_ID_LENGTH; i++) {
-        debug("%02x", key_id[i]);
-    }
 
 	*server_blobp = server_blob;
 	*shared_secretp = buf;
