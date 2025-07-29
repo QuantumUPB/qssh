@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 FROM debian:bookworm-slim
 
 # Disable interactive prompts during package installation
@@ -28,23 +29,35 @@ RUN apt-get update && \
     vim \
     && rm -rf /var/lib/apt/lists/*
 
+# Default SSH port can be overridden at runtime
+ENV SSH_PORT=2222
+
 # Create a user for SSH login
 RUN useradd -ms /bin/bash sshuser
 RUN echo 'sshuser:password' | chpasswd
 
 # Copy your custom OpenSSH source code into the container
 COPY openssh-portable /openssh-portable
+COPY sshd_config /etc/ssh/sshd_config
+RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
+COPY ssh_config /root/.ssh/config
+RUN chmod 600 /root/.ssh/config
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Set the working directory
 WORKDIR /openssh-portable
 
 # Build and install OpenSSH
 RUN autoreconf && \
-    ./configure --with-pam --prefix=/usr --sysconfdir=/etc/ssh && \
+    ./configure --with-pam --with-sandbox=no --prefix=/usr --sysconfdir=/etc/ssh && \
     make clean
 
-# Allow password authentication and root login (for testing purposes)
-# RUN sed -i '/^LDFLAGS[[:space:]]*=/ s/$/-lcurl -ljson-c -lssl -lcrypto -luuid/' Makefile
+# Adjust linker flags so that the custom QKD key exchange code links
+# against libcurl, json-c, OpenSSL and uuid. Without these libraries
+# the build fails during the final link step.
+RUN sed -i '/^LDFLAGS[[:space:]]*=/ s/$/ -lcurl -ljson-c -lssl -lcrypto -luuid/' Makefile && \
+    sed -i '/^LIBS[[:space:]]*=/ s/$/ -lcurl -ljson-c -lssl -lcrypto -luuid/' Makefile
 
 RUN make && \
     make install
@@ -65,13 +78,14 @@ RUN echo "LogLevel DEBUG3" >> /etc/ssh/sshd_config
 RUN useradd -u 35 -g 33 -c sshd -d / sshd
 
 RUN mkdir /certs
+# Copy provided certificates (if any) into the image. The source
+# directory exists in the repository but may be empty, so this step
+# succeeds even when no certificate files are present.
+COPY certs/ /certs/
 
-COPY gssapi_mech/qkd.crt /certs/qkd.crt 
-COPY gssapi_mech/qkd-ca.crt /certs/qkd-ca.crt  
-COPY gssapi_mech/qkd-new.key /certs/qkd.key
 
-# # Expose SSH port
-EXPOSE 22
+# Expose default SSH port
+EXPOSE 2222
 
-# Set the default command to run when starting the container
-CMD ["/usr/sbin/sshd", "-D", "-e"]
+# Start sshd via custom entrypoint to allow dynamic port configuration
+CMD ["/entrypoint.sh"]

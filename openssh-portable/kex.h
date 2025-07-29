@@ -73,6 +73,7 @@
 #define CURVE25519_SIZE 32
 
 #define QKD_KEY_SIZE 32
+#define QKD_KEY_ID_LENGTH 16
 
 enum kex_init_proposals {
 	PROPOSAL_KEX_ALGS,
@@ -186,8 +187,9 @@ struct kex {
 	u_char c25519_client_pubkey[CURVE25519_SIZE]; /* 25519 */
 	u_char sntrup761_client_key[crypto_kem_sntrup761_SECRETKEYBYTES]; /* KEM */
 	u_char mlkem768_client_key[crypto_kem_mlkem768_SECRETKEYBYTES]; /* KEM */
-	u_char qkd_client_key[QKD_KEY_SIZE];
-	struct sshbuf *client_pub;
+       u_char qkd_client_key[QKD_KEY_SIZE];
+       u_char qkd_key_id[QKD_KEY_ID_LENGTH];
+       struct sshbuf *client_pub;
 };
 
 int	 kex_name_valid(const char *);

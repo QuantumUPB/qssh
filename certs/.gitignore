@@ -1,5 +1,3 @@
-libgss_qkd.so
-test_qkd
 qkd.crt
 qkd-ca.crt
 qkd.key

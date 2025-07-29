@@ -1,8 +1,7 @@
-# Custom GSSAPI Mechanism with QKD-Based Session Key Integration
+# QKD-Based Session Key Integration
 
 ## Overview
 
-This project implements a custom GSSAPI mechanism that integrates with OpenSSH to utilize session keys derived from Quantum Key Distribution (QKD) devices. The mechanism establishes a secure SSH connection using keys obtained from QKD devices, ensuring enhanced security through quantum-safe key exchange.
 
 The session key forming mechanism involves a protocol where three 256-bit keys are retrieved from the QKD devices. Specific parts of these keys are used for mutual authentication and to form the session key for the SSH session.
 
@@ -12,8 +11,8 @@ The session key forming mechanism involves a protocol where three 256-bit keys a
 - [Features](#features)
 - [Prerequisites](#prerequisites)
 - [Build Instructions](#build-instructions)
-- [Installation](#installation)
-- [Configuration](#configuration)
+- [Docker Deployment](#docker-deployment)
+- [Environment Variables](#environment-variables)
 - [Usage](#usage)
 - [Session Key Forming Mechanism](#session-key-forming-mechanism)
   - [Key Retrieval](#key-retrieval)
@@ -28,7 +27,6 @@ The session key forming mechanism involves a protocol where three 256-bit keys a
 ## Features
 
 - **Quantum-Safe Key Exchange**: Utilizes keys from QKD devices to establish SSH sessions.
-- **Custom GSSAPI Mechanism**: Implements a GSSAPI mechanism without modifying the OpenSSH codebase.
 - **Mutual Authentication**: Verifies that both client and server have synchronized keys.
 - **Secure Session Key Formation**: Derives the session key from verified key material.
 
@@ -36,9 +34,7 @@ The session key forming mechanism involves a protocol where three 256-bit keys a
 
 - **Operating System**: Linux (e.g., Ubuntu, CentOS)
 - **C Compiler**: GCC or Clang
-- **GSSAPI Development Libraries and Headers**: e.g., MIT Kerberos or Heimdal
 - **libcurl**: For HTTP communication with QKD devices
-- **OpenSSH**: Version supporting GSSAPI (both client and server)
 - **Access to QKD Devices**: With an HTTP API for key retrieval
 
 ## Build Instructions
@@ -56,87 +52,106 @@ For **Debian/Ubuntu**:
 
 ```bash
 sudo apt-get update
-sudo apt-get install libcurl4-openssl-dev libjson-c-dev libssl-dev uuid-dev libkrb5-dev
+sudo apt-get install libcurl4-openssl-dev libjson-c-dev libssl-dev uuid-dev
 ```
 
 For **CentOS/RHEL**:
-
 ```bash
 sudo yum groupinstall "Development Tools"
-sudo yum install krb5-devel libcurl-devel
+sudo yum install libcurl-devel
 ```
 
-### 3. Build the Shared Library
+### 3. Provide QKD Certificates (Optional)
 
-Run the following command to compile the code into a shared library:
+If you have QKD certificate files, place them in the `certs` directory:
+
+```
+qssh-master/certs/qkd.crt
+qssh-master/certs/qkd-ca.crt
+qssh-master/certs/qkd.key
+```
+
+These files are not tracked in version control. If the directory is empty or missing, the Docker image will still build, but no certificates will be included.
+
+
+## Docker Deployment
+
+You can build and run the project inside Docker containers using the provided
+`docker-compose.yml` file and the top-level `Makefile`.
+
+### Build the Docker image
 
 ```bash
-make
+make build
 ```
 
-This command uses the provided `Makefile` to compile `qkd_gssapi.c` into `libgss_qkd.so`.
-
-## Installation
-
-### 1. Install the Shared Library
-
-Copy the compiled shared library to a directory where the system can find it, such as `/usr/lib`:
+### Run in production mode
 
 ```bash
-sudo cp libgss_qkd.so /usr/lib/
+make prod
 ```
 
-### 2. Update GSSAPI Mechanism Configuration
-
-Create or update the GSSAPI mechanism configuration file, typically located at `/etc/gss/mech` or `/etc/gssapi/mech`.
-
-Add the following entry to register your mechanism:
-
-```
-qkd    1.3.6.1.4.1.12345.2    /usr/lib/libgss_qkd.so
-```
-
-Replace `1.3.6.1.4.1.12345.2` with the actual OID used in your implementation if different.
-
-## Configuration
-
-### 1. Configure OpenSSH Client
-
-Edit the OpenSSH client configuration file `~/.ssh/config` or `/etc/ssh/ssh_config`:
-
-```ini
-Host *
-    GSSAPIAuthentication yes
-    GSSAPIDelegateCredentials no
-    GSSAPIKeyExchange yes
-    GSSAPITrustDns no
-    GSSAPIClientIdentity qkd
-```
-
-### 2. Configure OpenSSH Server
-
-Edit the OpenSSH server configuration file `/etc/ssh/sshd_config`:
-
-```ini
-GSSAPIAuthentication yes
-GSSAPICleanupCredentials yes
-GSSAPIKeyExchange yes
-GSSAPIStrictAcceptorCheck no
-GSSAPIStoreCredentialsOnRekey no
-```
-
-Restart the SSH daemon:
+This starts a single container that makes the SSH service available on
+port `2222` of the host.
+You can override the exposed port by providing a `PORT` variable:
 
 ```bash
-sudo systemctl restart sshd
+make prod PORT=2200
 ```
+
+The SSH daemon inside the container will also listen on the chosen port.
+
+### Run in testing mode
+
+```bash
+make testing
+```
+
+This launches both a server container and a client container. The server binds
+to port `2222` and the client binds to port `2223`. Ensure no other services are
+occupying these ports.
+Custom ports can be provided using the `PORT` and `CLIENT_PORT` variables:
+
+```bash
+make testing PORT=2200 CLIENT_PORT=2201
+```
+
+### Connect to running containers
+
+Use the `connect.sh` helper script to start a shell inside one of the containers:
+
+```bash
+./connect.sh server   # or ./connect.sh client
+```
+
+### Environment Variables
+
+- The library reads the following variables to locate the QKD services:
+
+- `QKD_ENC_IPPORT` – address of the encryption key service. Defaults to `localhost:6600` if not set.
+- `QKD_DEC_IPPORT` – address of the decryption key service. Defaults to `localhost:6600` if not set.
+- `QKD_ENC_SAE_ID` – SAE identifier used when requesting encryption keys. Defaults to `UPB-BC-UPBR` if not set.
+- `QKD_DEC_SAE_ID` – SAE identifier used when requesting decryption keys. Defaults to `UPB-BC-UPBP` if not set.
+- `QKD_ENC_KME` – KME path for encryption key requests. Defaults to `kme` if not set.
+- `QKD_DEC_KME` – KME path for decryption key requests. Defaults to `kme` if not set.
+- `SSH_PORT` – port on which the SSH daemon runs inside the container. When using the `Makefile`, this is set automatically based on the `PORT` (and `CLIENT_PORT`) variables.
 
 ## Usage
 
-Establish an SSH connection using your custom GSSAPI mechanism:
+After starting the containers you can initiate an SSH connection using the
+default credentials `sshuser:password`.
+
+### From the host machine
 
 ```bash
-ssh -vvv user@server.com
+ssh -p 2222 sshuser@localhost
+```
+
+### From the client container
+
+```bash
+./connect.sh client
+ssh -vvv sshuser@ssh_server
 ```
 
 The `-vvv` flag enables verbose output for debugging purposes.
@@ -228,7 +243,6 @@ Form SessionKey = Key1[129-256] || Key3[129-256]
 - **Common Issues**:
   - **Key Synchronization Failed**: Indicates that the keys are desynchronized or incorrect keys were retrieved.
   - **Defective Token**: Suggests an issue with token serialization or deserialization.
-  - **Mechanism Not Found**: Ensure that the GSSAPI mechanism configuration file is correctly updated.
 - **Logs and Debugging**:
   - Check system logs and OpenSSH logs for additional information.
 

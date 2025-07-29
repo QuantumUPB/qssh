@@ -562,10 +562,17 @@ kex_input_newkeys(int type, u_int32_t seq, struct ssh *ssh)
 	kex->done = 1;
 	kex->flags &= ~KEX_INITIAL;
 	sshbuf_reset(kex->peer);
-	kex->flags &= ~KEX_INIT_SENT;
-	free(kex->name);
-	kex->name = NULL;
-	return 0;
+       kex->flags &= ~KEX_INIT_SENT;
+       free(kex->name);
+       kex->name = NULL;
+       if (kex->kex_type == KEX_QKD128_ETSI_014_SHA256) {
+               char *hex = tohex(kex->qkd_key_id, QKD_KEY_ID_LENGTH);
+               if (hex != NULL) {
+                       logit("This session is secured with a QKD-created key with id '%s'", hex);
+                       free(hex);
+               }
+       }
+       return 0;
 }
 
 int

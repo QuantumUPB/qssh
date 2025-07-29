@@ -1,4 +1,4 @@
-Port 22
+Port 2222
 Protocol 2
 HostKey /etc/ssh/ssh_host_rsa_key
 SyslogFacility AUTH
@@ -7,15 +7,6 @@ LogLevel DEBUG3
 PermitRootLogin yes
 StrictModes no
 
-# Enable GSSAPI authentication
-GSSAPIAuthentication no 
-GSSAPICleanupCredentials yes
-
-# Enable GSSAPI Key Exchange
-GSSAPIKeyExchange yes
-
-# Specify your GSSAPI mechanism's OID (replace with your actual OID)
-GSSAPIKexAlgorithms gss-gex-sha1-1.3.6.1.4.1.12345.2
 
 # Allow password authentication for testing (optional)
 PasswordAuthentication yes
