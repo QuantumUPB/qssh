@@ -20,3 +20,6 @@ stop:
 
 clean: stop
 	$(COMPOSE) -f $(COMPOSE_FILE) rm -f server client
+
+zip:
+	zip -r qssh.zip ./*

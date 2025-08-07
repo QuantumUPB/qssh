@@ -79,6 +79,21 @@ These files are not tracked in version control. If the directory is empty or mis
 You can build and run the project inside Docker containers using the provided
 `docker-compose.yml` file and the top-level `Makefile`.
 
+### Configure environment variables
+
+Copy the sample files and adjust the values before starting the containers:
+
+```bash
+cp server.env.sample server.env
+cp client.env.sample client.env
+```
+
+Edit `server.env` and `client.env` to match your environment. Each file defines
+settings such as `SSH_PORT`, `QKD_ENC_IPPORT`, `QKD_DEC_IPPORT`,
+`QKD_ENC_SAE_ID`, `QKD_DEC_SAE_ID`, `QKD_ENC_KME`, `QKD_DEC_KME`,
+`SELF_REPORTING`, `REPORT_ENDPOINT`, `REPORTING_NAME`,
+`REPORT_TRUST_SELF_SIGNED`, and `REPORT_TOKEN`.
+
 ### Build the Docker image
 
 ```bash
@@ -126,7 +141,8 @@ Use the `connect.sh` helper script to start a shell inside one of the containers
 
 ### Environment Variables
 
-- The library reads the following variables to locate the QKD services:
+The containers load configuration from `server.env` and `client.env` (generated
+from the `*.env.sample` files). The following variables are recognised:
 
 - `QKD_ENC_IPPORT` – address of the encryption key service. Defaults to `localhost:6600` if not set.
 - `QKD_DEC_IPPORT` – address of the decryption key service. Defaults to `localhost:6600` if not set.
@@ -134,7 +150,8 @@ Use the `connect.sh` helper script to start a shell inside one of the containers
 - `QKD_DEC_SAE_ID` – SAE identifier used when requesting decryption keys. Defaults to `UPB-BC-UPBP` if not set.
 - `QKD_ENC_KME` – KME path for encryption key requests. Defaults to `kme` if not set.
 - `QKD_DEC_KME` – KME path for decryption key requests. Defaults to `kme` if not set.
-- `SSH_PORT` – port on which the SSH daemon runs inside the container. When using the `Makefile`, this is set automatically based on the `PORT` (and `CLIENT_PORT`) variables.
+- `SSH_PORT` – port on which the SSH daemon runs inside the container. Adjust
+  this value in `server.env` and `client.env` before launching.
 
 ## Usage
 

@@ -27,13 +27,13 @@
 #include "ssherr.h"
 #include "sshkey.h"
 
-#define DEFAULT_ENC_SAE_ID "precisB-qssh"
-#define DEFAULT_DEC_SAE_ID "rectorat-qssh"
+#define DEFAULT_ENC_SAE_ID ""
+#define DEFAULT_DEC_SAE_ID ""
 #define QKD_ENC_SAE_ENV "QKD_ENC_SAE_ID"
 #define QKD_DEC_SAE_ENV "QKD_DEC_SAE_ID"
 
-#define DEFAULT_ENC_KME "rectorat/qssh"
-#define DEFAULT_DEC_KME "precisB/qssh"
+#define DEFAULT_ENC_KME ""
+#define DEFAULT_DEC_KME ""
 #define QKD_ENC_KME_ENV "QKD_ENC_KME"
 #define QKD_DEC_KME_ENV "QKD_DEC_KME"
 
@@ -242,28 +242,36 @@ int qkd_get_key(QKD_Key *key) {
     const char *ssl_cert = "/certs/qkd.crt";
     const char *ssl_key = "/certs/qkd.key";
     const char *cacert = "/certs/qkd-ca.crt";
-    bool have_cert =
-        file_exists(ssl_cert) && file_exists(ssl_key) && file_exists(cacert);
 #else
     const char *ssl_cert = getenv("QKD_SSL_CERT");
     const char *ssl_key = getenv("QKD_SSL_CERT");
     const char *cacert = getenv("QKD_SSL_CERT");
-    bool have_cert = ssl_cert && file_exists(ssl_cert) && ssl_key &&
-                     file_exists(ssl_key) && cacert && file_exists(cacert);
 #endif
+    bool have_cert =
+        ssl_cert && file_exists(ssl_cert) && ssl_key && file_exists(ssl_key);
+    bool have_cacert = cacert && file_exists(cacert);
 
     const char *scheme = have_cert ? "https" : "http";
 
-    // Set the URL
+    // Set the URL; omit KME component if not specified
     char qkd_url[256];
-    snprintf(qkd_url, sizeof(qkd_url), "%s://%s/%s/api/v1/keys/%s/enc_keys",
-             scheme, qkd_ipport_value, enc_kme, enc_sae);
+    if (enc_kme != NULL && *enc_kme != '\0') {
+      snprintf(qkd_url, sizeof(qkd_url), "%s://%s/%s/api/v1/keys/%s/enc_keys",
+               scheme, qkd_ipport_value, enc_kme, enc_sae);
+    } else {
+      snprintf(qkd_url, sizeof(qkd_url), "%s://%s/api/v1/keys/%s/enc_keys",
+               scheme, qkd_ipport_value, enc_sae);
+    }
     curl_easy_setopt(curl, CURLOPT_URL, qkd_url);
 
     if (have_cert) {
       curl_easy_setopt(curl, CURLOPT_SSLCERT, ssl_cert);
       curl_easy_setopt(curl, CURLOPT_SSLKEY, ssl_key);
-      curl_easy_setopt(curl, CURLOPT_CAINFO, cacert);
+      if (have_cacert) {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, cacert);
+      } else {
+        debug("No CA certificate found; proceeding without CAINFO\n");
+      }
     } else {
       debug("No certificates found; using HTTP mode\n");
     }
@@ -427,28 +435,36 @@ int qkd_get_key_by_id(const uint8_t key_id[QKD_KEY_ID_LENGTH], QKD_Key *key) {
     const char *ssl_cert = "/certs/qkd.crt";
     const char *ssl_key = "/certs/qkd.key";
     const char *cacert = "/certs/qkd-ca.crt";
-    bool have_cert =
-        file_exists(ssl_cert) && file_exists(ssl_key) && file_exists(cacert);
 #else
     const char *ssl_cert = getenv("QKD_SSL_CERT");
     const char *ssl_key = getenv("QKD_SSL_CERT");
     const char *cacert = getenv("QKD_SSL_CERT");
-    bool have_cert = ssl_cert && file_exists(ssl_cert) && ssl_key &&
-                     file_exists(ssl_key) && cacert && file_exists(cacert);
 #endif
+    bool have_cert =
+        ssl_cert && file_exists(ssl_cert) && ssl_key && file_exists(ssl_key);
+    bool have_cacert = cacert && file_exists(cacert);
 
     const char *scheme = have_cert ? "https" : "http";
 
-    // Build the URL
+    // Build the URL; omit KME component if not specified
     char qkd_url[256];
-    snprintf(qkd_url, sizeof(qkd_url), "%s://%s/%s/api/v1/keys/%s/dec_keys",
-             scheme, qkd_ipport_value, dec_kme, dec_sae);
+    if (dec_kme != NULL && *dec_kme != '\0') {
+      snprintf(qkd_url, sizeof(qkd_url), "%s://%s/%s/api/v1/keys/%s/dec_keys",
+               scheme, qkd_ipport_value, dec_kme, dec_sae);
+    } else {
+      snprintf(qkd_url, sizeof(qkd_url), "%s://%s/api/v1/keys/%s/dec_keys",
+               scheme, qkd_ipport_value, dec_sae);
+    }
     curl_easy_setopt(curl, CURLOPT_URL, qkd_url);
 
     if (have_cert) {
       curl_easy_setopt(curl, CURLOPT_SSLCERT, ssl_cert);
       curl_easy_setopt(curl, CURLOPT_SSLKEY, ssl_key);
-      curl_easy_setopt(curl, CURLOPT_CAINFO, cacert);
+      if (have_cacert) {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, cacert);
+      } else {
+        debug("No CA certificate found; proceeding without CAINFO\n");
+      }
     } else {
       debug("No certificates found; using HTTP mode\n");
     }

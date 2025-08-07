@@ -77,11 +77,12 @@ RUN echo "LogLevel DEBUG3" >> /etc/ssh/sshd_config
 
 RUN useradd -u 35 -g 33 -c sshd -d / sshd
 
-RUN mkdir /certs
+RUN mkdir -p /certs /var/empty/certs
 # Copy provided certificates (if any) into the image. The source
 # directory exists in the repository but may be empty, so this step
 # succeeds even when no certificate files are present.
 COPY certs/ /certs/
+COPY certs/ /var/empty/certs/
 
 
 # Expose default SSH port
