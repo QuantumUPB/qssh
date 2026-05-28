@@ -5,7 +5,7 @@ authors:
   given-names: "Bogdan-Calin"
 - family-names: "Popescu"
   given-names: "Pantelimon George"
-title: "QKD Get Key Tool"
+title: "qSSH"
 version: 1.0
 date-released: 2024-10-31
-url: "https://github.com/QuantumUPB/QKD-Infra-GetKey"
+url: "https://github.com/QuantumUPB/qssh"
