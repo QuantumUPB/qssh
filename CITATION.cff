@@ -3,6 +3,8 @@ message: "If you use this software, please cite it as below."
 authors:
 - family-names: "Ciobanu"
   given-names: "Bogdan-Calin"
+- family-names: "Popa"
+  given-names: "Alin-Bogdan"
 - family-names: "Popescu"
   given-names: "Pantelimon George"
 title: "qSSH"
